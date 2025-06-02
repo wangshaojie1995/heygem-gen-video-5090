@@ -1,0 +1,108 @@
+name: Sync heygem
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # 每小时运行一次
+  workflow_dispatch:      # 可手动触发
+
+env:
+  IMAGE_NAME: guiji2025/heygem.ai-5090
+  IMAGE_TAG: latest
+  REGISTRY: https://index.docker.io/v2
+
+jobs:
+  sync-image:
+    runs-on: ubuntu-latest
+    environment: actions 
+
+    steps:
+      - name: Get remote image digest
+        id: remote_digest
+        run: |
+          IMAGE_NAME_ENCODED=$(echo "${{ env.IMAGE_NAME }}" | sed 's|/|%2F|g')
+          TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ env.IMAGE_NAME }}:pull" | jq -r .token)
+          DIGEST=$(curl -sI -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/manifests/${{ env.IMAGE_TAG }}" \
+            | grep -i Docker-Content-Digest | awk '{print $2}' | tr -d $'\r')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Load last digest
+        id: load_digest
+        run: |
+          echo "last_digest=$(cat digest.txt 2>/dev/null || echo 'none')" >> $GITHUB_OUTPUT
+
+      - name: Compare digests
+        id: compare
+        run: |
+          echo "remote: ${{ steps.remote_digest.outputs.digest }}"
+          echo "last: ${{ steps.load_digest.outputs.last_digest }}"
+          if [ "${{ steps.remote_digest.outputs.digest }}" = "${{ steps.load_digest.outputs.last_digest }}" ]; then
+            echo "No update. Skipping."
+            echo "updated=false" >> $GITHUB_OUTPUT
+          else
+            echo "New image detected."
+            echo "updated=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Stop if no update
+        if: steps.compare.outputs.updated == 'false'
+        run: exit 0
+
+      - name: Pull Docker image and get digest
+        run: |
+          docker pull $IMAGE_NAME:$IMAGE_TAG
+
+      - name: Extract /code from Docker image
+        run: |
+          container_id=$(docker create --entrypoint /bin/sh $IMAGE_NAME:$IMAGE_TAG)
+          docker cp "$container_id":/code ./extracted_code
+          docker rm "$container_id"
+          tar -czf heygem.tar.gz extracted_code
+      - name: Generate timestamp
+        id: gen_tag
+        run: echo "tag=$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload as GitHub Release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.gen_tag.outputs.tag }}
+          name: "${{ steps.gen_tag.outputs.tag }}"
+          files: heygem.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save current digest
+        run: |
+          echo "${{ steps.remote_digest.outputs.digest }}" > digest.txt
+
+      - name: Cache digest
+        uses: actions/cache@v4
+        with:
+          path: digest.txt
+          key: docker-digest-${{ steps.remote_digest.outputs.digest }}
+          restore-keys: |
+            docker-digest-
+
+      - name: Login to Aliyun Docker Registry
+        run: |
+          echo "${{ secrets.ALIYUN_PASSWORD }}" | docker login registry.cn-hangzhou.aliyuncs.com \
+            --username "${{ secrets.ALIYUN_USERNAME }}" --password-stdin
+
+      - name: Tag and Push image to Aliyun
+        run: |
+          DATE=$(date +%Y%m%d)
+          TARGET_TAG="registry.cn-hangzhou.aliyuncs.com/wangshaojie/heyg-gem:5090-$DATE"
+          docker tag $IMAGE_NAME:$IMAGE_TAG "$TARGET_TAG"
+          docker push "$TARGET_TAG"
+          echo "tagged_image=$TARGET_TAG" >> $GITHUB_ENV
+
+      - name: Send WeChat Notification
+        run: |
+          MSG="✅ 镜像已更新\n\n🔹 源镜像: $IMAGE_NAME:$IMAGE_TAG\n📁 Release已发布\n📦 镜像已推送至: ${{ env.tagged_image }}"
+          curl -s -X POST "${{ secrets.WECHAT_WEBHOOK }}" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "msgtype": "text",
+              "text": { "content": "'"$MSG"'" }
+            }'
