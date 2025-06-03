@@ -16,7 +16,7 @@
 
 heygem-gen-video 是一个基于 Python 的数字人项目，它从 [HeyGem.ai](https://github.com/GuijiAI/HeyGem.ai) 中提取出来，它能够直接在 Linux 系统上运行，摆脱了对 Docker 和 Windows 系统的依赖。我们的目标是提供一个更易于部署和使用的数字人解决方案。   
 
-[RTX 50版本已经发布，点击可达](https://github.com/wangshaojie1995/heygem-gen-video-5090)  
+[Python3.8版本已经发布，点击可达](https://github.com/wangshaojie1995/heygem-gen-video)  
 
 **如果你觉得这个项目对你有帮助，欢迎给我们 Star！**  
 **如果运行过程中遇到问题，在查阅已有 Issue 后，在查阅 Google/baidu/ai 后，欢迎提交 Issues！**  
